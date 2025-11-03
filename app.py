@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 import io
 import base64
-from urllib.parse import urlparse
+ 
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-in-production'
@@ -35,50 +35,7 @@ EMOTION_MESSAGES = {
 # Global variable to store the loaded model
 model = None
 
-# Database type: 'sqlite' or 'postgresql'
-DB_TYPE = None
-
-def get_db_connection():
-    """
-    Get database connection based on DATABASE_URL environment variable.
-    Falls back to SQLite if DATABASE_URL is not set.
-    """
-    global DB_TYPE
-    database_url = os.environ.get('DATABASE_URL')
-    
-    if database_url:
-        # Parse PostgreSQL URL (Railway format: postgresql://user:pass@host:port/dbname)
-        # Sometimes Railway uses postgres://, handle both
-        if database_url.startswith('postgres://'):
-            database_url = database_url.replace('postgres://', 'postgresql://', 1)
-        
-        try:
-            import psycopg2
-            from psycopg2.extras import RealDictCursor
-            
-            # Parse connection string
-            result = urlparse(database_url)
-            conn = psycopg2.connect(
-                database=result.path[1:],  # Remove leading '/'
-                user=result.username,
-                password=result.password,
-                host=result.hostname,
-                port=result.port
-            )
-            DB_TYPE = 'postgresql'
-            return conn
-        except ImportError:
-            print("Warning: psycopg2 not installed, falling back to SQLite")
-            DB_TYPE = 'sqlite'
-        except Exception as e:
-            print(f"Error connecting to PostgreSQL: {e}")
-            print("Falling back to SQLite")
-            DB_TYPE = 'sqlite'
-    
-    # Default to SQLite
-    if DB_TYPE is None:
-        DB_TYPE = 'sqlite'
-    return sqlite3.connect('database.db')
+ 
 
 def load_model():
     """Load the trained emotion recognition model."""
@@ -95,65 +52,36 @@ def load_model():
     return model
 
 def init_database():
-    """Initialize database and create tables if they don't exist."""
-    conn = get_db_connection()
+    """Initialize SQLite database and create tables if they don't exist."""
+    conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     
-    # Determine SQL syntax based on database type
-    if DB_TYPE == 'postgresql':
-        # PostgreSQL syntax
-        users_table_sql = '''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                email VARCHAR(255) NOT NULL,
-                student_id VARCHAR(255),
-                submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        '''
-        images_table_sql = '''
-            CREATE TABLE IF NOT EXISTS images (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER,
-                image_data BYTEA,
-                emotion_detected VARCHAR(50),
-                confidence REAL,
-                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-            )
-        '''
-        # PostgreSQL uses %s for placeholders, but CREATE TABLE doesn't need placeholders
-        # The syntax is already correct above
-    else:
-        # SQLite syntax
-        users_table_sql = '''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT NOT NULL,
-                student_id TEXT,
-                submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        '''
-        images_table_sql = '''
-            CREATE TABLE IF NOT EXISTS images (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                image_data BLOB,
-                emotion_detected TEXT,
-                confidence REAL,
-                FOREIGN KEY (user_id) REFERENCES users (id)
-            )
-        '''
-    
     # Create users table
-    cursor.execute(users_table_sql)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            student_id TEXT,
+            submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
-    # Create images table
-    cursor.execute(images_table_sql)
+    # Create images table (stores image data)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            image_data BLOB,
+            emotion_detected TEXT,
+            confidence REAL,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
     
     conn.commit()
     conn.close()
-    print(f"Database initialized successfully! (Using {DB_TYPE.upper()})")
+    print("Database initialized successfully!")
 
 def preprocess_image(image_file):
     """
@@ -228,45 +156,23 @@ def predict_emotion(image_file):
 
 def save_to_database(name, email, student_id, image_bytes, emotion, confidence):
     """Save user information and image to database."""
-    conn = get_db_connection()
+    conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     
     try:
-        # Use appropriate placeholder syntax based on database type
-        if DB_TYPE == 'postgresql':
-            # PostgreSQL uses %s for placeholders
-            cursor.execute('''
-                INSERT INTO users (name, email, student_id)
-                VALUES (%s, %s, %s)
-            ''', (name, email, student_id))
-            
-            # PostgreSQL returns the id using RETURNING or lastrowid
-            user_id = cursor.lastrowid if hasattr(cursor, 'lastrowid') else cursor.fetchone()[0] if hasattr(cursor, 'fetchone') else None
-            
-            # Get the inserted user_id
-            if user_id is None:
-                cursor.execute('SELECT LASTVAL()')
-                user_id = cursor.fetchone()[0]
-            
-            # Insert image and emotion data (BYTEA accepts bytes directly)
-            cursor.execute('''
-                INSERT INTO images (user_id, image_data, emotion_detected, confidence)
-                VALUES (%s, %s, %s, %s)
-            ''', (user_id, image_bytes, emotion, confidence))
-        else:
-            # SQLite uses ? for placeholders
-            cursor.execute('''
-                INSERT INTO users (name, email, student_id)
-                VALUES (?, ?, ?)
-            ''', (name, email, student_id))
-            
-            user_id = cursor.lastrowid
-            
-            # SQLite uses Binary() wrapper for BLOB
-            cursor.execute('''
-                INSERT INTO images (user_id, image_data, emotion_detected, confidence)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, sqlite3.Binary(image_bytes), emotion, confidence))
+        # Insert user information
+        cursor.execute('''
+            INSERT INTO users (name, email, student_id)
+            VALUES (?, ?, ?)
+        ''', (name, email, student_id))
+        
+        user_id = cursor.lastrowid
+        
+        # Insert image and emotion data
+        cursor.execute('''
+            INSERT INTO images (user_id, image_data, emotion_detected, confidence)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, sqlite3.Binary(image_bytes), emotion, confidence))
         
         conn.commit()
         return True
