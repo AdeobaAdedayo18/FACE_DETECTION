@@ -250,13 +250,18 @@ if __name__ == '__main__':
     # Load model on startup
     load_model()
     
+    # Get port from environment variable (Railway provides this) or default to 5000
+    port = int(os.environ.get('PORT', 5000))
+    
     # Run Flask app
     print("\n" + "=" * 50)
     print("FACIAL EMOTION DETECTION WEB APP")
     print("=" * 50)
     print("Starting Flask server...")
-    print("Open your browser and navigate to: http://127.0.0.1:5000")
+    print(f"Server running on port {port}")
     print("=" * 50 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Disable debug mode in production (Railway sets FLASK_ENV)
+    debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    app.run(debug=debug_mode, host='0.0.0.0', port=port)
 
